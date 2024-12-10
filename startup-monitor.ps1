@@ -1,37 +1,97 @@
 # Advanced Startup Script
-
-
+# Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
 # Configuration Section
 $config = @{
-    WallpaperPath = ""  # Replace with your wallpaper directory
-    GeminiApiKey = ""  # Replace with your actual Gemini API key
-    LogPath = "$env:USERPROFILE\startup_log.txt"  # Changed to user root directory
+    WallpaperPath = "C:\Users\Pictures\Images"  # Set wallpaper directory
+    GeminiApiKey = ""  # Set your Gemini API key here
+    LogPath = "$env:USERPROFILE\startup_log.txt"  # Log file location
     NetworkCheckUrls = @(
         "https://www.google.com",
         "https://www.microsoft.com",
         "https://www.cloudflare.com"
     )
+    # Color Scheme using direct color definition
+    Colors = @{
+        Background = [System.Drawing.SystemColors]::Control
+        PrimaryButton = [System.Drawing.Color]::DodgerBlue
+        SecondaryButton = [System.Drawing.Color]::MediumSeaGreen
+        TextColor = [System.Drawing.Color]::FromName("DarkSlateGray")
+    }
 }
+
+
+Add-Type -Path "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\System.Windows.Forms.dll"
+
+
+# Helper Function: Display Styled Notifications
+function Show-StyledNotification {
+    param (
+        [string]$Message,
+        [string]$Title = "Notification",
+        [int]$Width = 500,
+        [int]$Height = 400
+    )
+
+
+    # Create main form
+    $form = New-Object System.Windows.Forms.Form
+    $form.Text = $Title
+    $form.Size = New-Object System.Drawing.Size($Width, $Height)
+    $form.StartPosition = "CenterScreen"
+    $form.BackColor = [System.Drawing.SystemColors]::Control
+    $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
+    $form.MaximizeBox = $false
+
+
+    # Rich Text Box for scrollable content
+    $richTextBox = New-Object System.Windows.Forms.RichTextBox
+    $richTextBox.Dock = [System.Windows.Forms.DockStyle]::Fill
+    $richTextBox.ReadOnly = $true
+    $richTextBox.BackColor = [System.Drawing.Color]::White
+    $richTextBox.Font = New-Object System.Drawing.Font("Segoe UI", 10)
+    $richTextBox.Text = $Message
+
+
+    # Close button with improved styling
+    $closeButton = New-Object System.Windows.Forms.Button
+    $closeButton.Text = "Close"
+    $closeButton.BackColor = [System.Drawing.Color]::DodgerBlue
+    $closeButton.ForeColor = [System.Drawing.Color]::White
+    $closeButton.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $closeButton.Dock = [System.Windows.Forms.DockStyle]::Bottom
+    $closeButton.Height = 40
+    $closeButton.Font = New-Object System.Drawing.Font("Segoe UI Semibold", 10)
+    $closeButton.Add_Click({ $form.Close() })
+
+
+    # Add controls
+    $form.Controls.Add($richTextBox)
+    $form.Controls.Add($closeButton)
+
+
+    # Show the form
+    $form.ShowDialog()
+}
+
+
 
 
 # Function to Change Wallpaper
 function Set-RandomWallpaper {
     try {
-        # Get all image files from the specified directory
         $wallpapers = Get-ChildItem -Path $config.WallpaperPath -Include *.jpg, *.jpeg, *.png, *.bmp -Recurse
 
 
-        if ($wallpapers.Count -eq 0) {
-            Write-Warning "No wallpapers found in the specified directory."
+        if (-not $wallpapers) {
+            Show-Notification "No wallpapers found in the specified directory." "Wallpaper Change Failed"
             return
         }
 
 
-        # Select a random wallpaper
         $randomWallpaper = $wallpapers | Get-Random
 
 
-        # Set wallpaper using Windows API
         Add-Type -TypeDefinition @"
         using System;
         using System.Runtime.InteropServices;
@@ -45,180 +105,194 @@ function Set-RandomWallpaper {
 
 
         Write-Host "Wallpaper set to: $($randomWallpaper.Name)"
-    }
-    catch {
+    } catch {
         Write-Error "Failed to set wallpaper: $_"
+        Show-Notification "Error setting wallpaper: $_" "Error"
     }
 }
 
 
 # Function to Check Network Connectivity
 function Test-NetworkConnectivity {
-    $connectivityResults = @()
-   
-    foreach ($url in $config.NetworkCheckUrls) {
+    $results = foreach ($url in $config.NetworkCheckUrls) {
         try {
-            $request = Invoke-WebRequest -Uri $url -Method Head -TimeoutSec 10
-            $connectivityResults += [PSCustomObject]@{
+            $response = Invoke-WebRequest -Uri $url -Method Head -TimeoutSec 10
+            [PSCustomObject]@{
                 URL = $url
                 Status = "Connected"
-                ResponseCode = $request.StatusCode
+                ResponseCode = $response.StatusCode
             }
-        }
-        catch {
-            $connectivityResults += [PSCustomObject]@{
+        } catch {
+            [PSCustomObject]@{
                 URL = $url
                 Status = "Disconnected"
                 ErrorMessage = $_.Exception.Message
             }
         }
     }
-   
-    return $connectivityResults
+    return $results
 }
 
 
 # Function to Monitor System Resources
 function Get-SystemResourceStatus {
     try {
-        # CPU Usage
         $cpu = (Get-WmiObject win32_processor | Measure-Object -Property LoadPercentage -Average).Average
-
-
-        # Memory Usage
         $os = Get-WmiObject Win32_OperatingSystem
-        $totalMemory = $os.TotalVisibleMemorySize
-        $freeMemory = $os.FreePhysicalMemory
-        $memoryUsage = [math]::Round((($totalMemory - $freeMemory) / $totalMemory * 100), 2)
+        $memoryUsage = [math]::Round((($os.TotalVisibleMemorySize - $os.FreePhysicalMemory) / $os.TotalVisibleMemorySize) * 100, 2)
+        $disk = Get-PSDrive C | Select-Object Used, Free, @{Name='PercentFree';Expression={[math]::Round(($_.Free / ($_.Used + $_.Free)) * 100, 2)}}
 
 
-        # Disk Space
-        $disk = Get-PSDrive C | Select-Object Used, Free, @{Name='PercentFree';Expression={[math]::Round(($_.Free / ($_.Used + $_.Free) * 100), 2)}}
-
-
-        return [PSCustomObject]@{
+        [PSCustomObject]@{
             CPUUsage = $cpu
             MemoryUsage = $memoryUsage
-            DiskPercentFree = $disk.PercentFree
+            DiskFreePercentage = $disk.PercentFree
         }
-    }
-    catch {
+    } catch {
         Write-Error "Failed to retrieve system resources: $_"
         return $null
     }
 }
 
 
-# Function to Get Daily Greeting from Gemini API
+# Function to Get Daily Greeting
 function Get-DailyGreeting {
-    param(
+    param (
         [string]$Topic = "morning motivation"
     )
-
-
     try {
         if (-not $config.GeminiApiKey) {
-            throw "Gemini API key is not set"
+            throw "Gemini API key is not set."
         }
 
 
         $apiUrl = "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=$($config.GeminiApiKey)"
-       
-        $body = @{
-            contents = @{
-                role = "user"
-                parts = @{
-                    text = "Generate a unique, friendly, and inspirational good morning greeting about $Topic. Make it personal, motivational, and exactly 3 sentences long."
-                }
-            }
-        } | ConvertTo-Json -Depth 10
+        $body = @{ contents = @{ role = "user"; parts = @{ text = "Generate a motivational greeting about $Topic." } } } | ConvertTo-Json -Depth 10
 
 
         $response = Invoke-RestMethod -Uri $apiUrl -Method Post -Body $body -ContentType "application/json"
-       
-        # Extract the generated text from the API response
-        $greeting = $response.candidates[0].content.parts[0].text
-       
-        return $greeting
-    }
-    catch {
-        Write-Warning "Failed to get greeting from Gemini API: $_"
-        return "Good morning! Today is a new opportunity to achieve something amazing. Embrace the possibilities that await you."
+        return $response.candidates[0].content.parts[0].text
+    } catch {
+        Write-Warning "Failed to get greeting: $_"
+        return "Good morning! Today is a new opportunity to achieve greatness."
     }
 }
 
 
 # Function to Interact with Gemini AI
 function Start-GeminiChat {
-    try {
-        if (-not $config.GeminiApiKey) {
-            [System.Windows.Forms.MessageBox]::Show("Please set your Gemini API key in the configuration.", "API Key Required")
+
+
+    # Input form
+    $inputForm = New-Object System.Windows.Forms.Form
+    $inputForm.Text = "Gemini AI Chat"
+    $inputForm.Size = New-Object System.Drawing.Size(500, 250)
+    $inputForm.StartPosition = "CenterScreen"
+    $inputForm.BackColor = [System.Drawing.SystemColors]::Control
+
+
+    # Label
+    $label = New-Object System.Windows.Forms.Label
+    $label.Text = "Ask Gemini a question:"
+    $label.Location = New-Object System.Drawing.Point(20, 20)
+    $label.Size = New-Object System.Drawing.Size(460, 30)
+    $label.Font = New-Object System.Drawing.Font("Segoe UI", 12)
+
+
+    # Input text box
+    $inputTextBox = New-Object System.Windows.Forms.TextBox
+    $inputTextBox.Multiline = $true
+    $inputTextBox.Location = New-Object System.Drawing.Point(20, 60)
+    $inputTextBox.Size = New-Object System.Drawing.Size(460, 100)
+    $inputTextBox.Font = New-Object System.Drawing.Font("Segoe UI", 10)
+
+
+    # Send button
+    $sendButton = New-Object System.Windows.Forms.Button
+    $sendButton.Text = "Send to Gemini"
+    $sendButton.Location = New-Object System.Drawing.Point(200, 170)
+    $sendButton.Size = New-Object System.Drawing.Size(100, 40)
+    $sendButton.BackColor = [System.Drawing.Color]::MediumSeaGreen
+    $sendButton.ForeColor = [System.Drawing.Color]::White
+    $sendButton.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $sendButton.Font = New-Object System.Drawing.Font("Segoe UI Semibold", 10)
+
+
+    # Button click event
+    $sendButton.Add_Click({
+        $userInput = $inputTextBox.Text.Trim()
+       
+        if ([string]::IsNullOrWhiteSpace($userInput)) {
+            [System.Windows.Forms.MessageBox]::Show("Please enter a question.", "Input Required")
             return
         }
 
 
-        # Prompt user for input
-        Add-Type -AssemblyName Microsoft.VisualBasic
-        $userInput = [Microsoft.VisualBasic.Interaction]::InputBox("Ask Gemini a question:", "Gemini AI Chat")
+        try {
+            # Check API Key
+            if (-not $config.GeminiApiKey) {
+                [System.Windows.Forms.MessageBox]::Show("Please set the Gemini API key in the configuration.", "API Key Missing")
+                return
+            }
 
 
-        if (-not [string]::IsNullOrWhiteSpace($userInput)) {
+            # Gemini API Call
             $apiUrl = "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=$($config.GeminiApiKey)"
-           
             $body = @{
                 contents = @{
                     role = "user"
-                    parts = @{
-                        text = $userInput
-                    }
+                    parts = @{ text = $userInput }
                 }
             } | ConvertTo-Json -Depth 10
 
 
             $response = Invoke-RestMethod -Uri $apiUrl -Method Post -Body $body -ContentType "application/json"
-           
-            # Extract the generated text from the API response
             $aiResponse = $response.candidates[0].content.parts[0].text
 
 
-            # Show response in a message box
-            [System.Windows.Forms.MessageBox]::Show($aiResponse, "Gemini AI Response")
+            # Close input form
+            $inputForm.Close()
+
+
+            # Show response in scrollable notification
+            Show-StyledNotification -Message $aiResponse -Title "Gemini AI Response"
         }
-    }
-    catch {
-        [System.Windows.Forms.MessageBox]::Show("An error occurred: $_", "Gemini AI Error")
-    }
+        catch {
+            [System.Windows.Forms.MessageBox]::Show("Error: $_", "Gemini AI Error")
+        }
+    })
+
+
+    # Add controls to the form
+    $inputForm.Controls.Add($label)
+    $inputForm.Controls.Add($inputTextBox)
+    $inputForm.Controls.Add($sendButton)
+
+
+    # Show the input form
+    $inputForm.ShowDialog()
 }
 
 
 # Main Startup Script
 function Start-AdvancedStartup {
     try {
-        # Ensure required assemblies are loaded
-        Add-Type -AssemblyName System.Windows.Forms
-
-
-        # Change Wallpaper
         Set-RandomWallpaper
 
 
-        # Launch Applications
         Start-Process "C:\Program Files\Microsoft Office\root\Office16\OUTLOOK.EXE"
-        Start-Process "C:\Program Files\Google\Chrome\Application\chrome.exe" -ArgumentList "https://www.bing.com"
+        Start-Process "C:\Program Files\Google\Chrome\Application\chrome.exe" -ArgumentList "https://www.google.com"
         Start-Process "$env:UserProfile\anaconda3\Scripts\anaconda-navigator.exe"
 
 
-        # Wait for applications to start
         Start-Sleep -Seconds 10
 
 
-        # Perform Checks
         $networkStatus = Test-NetworkConnectivity
         $resourceStatus = Get-SystemResourceStatus
         $dailyGreeting = Get-DailyGreeting
 
 
-        # Prepare Startup Log
         $logContent = @"
 Daily Startup Report
 
@@ -233,63 +307,64 @@ $($networkStatus | Format-Table -AutoSize | Out-String)
 System Resources:
 CPU Usage: $($resourceStatus.CPUUsage)%
 Memory Usage: $($resourceStatus.MemoryUsage)%
-Disk Free: $($resourceStatus.DiskPercentFree)%
-
-
-Tip: Press Ctrl+G to open Gemini AI Chat
+Disk Free: $($resourceStatus.DiskFreePercentage)%
 "@
 
 
-        # Log the results
         $logContent | Out-File $config.LogPath
 
 
-        # Create a form for daily greeting and interaction
+        # Enhanced Form Styling
         $form = New-Object System.Windows.Forms.Form
         $form.Text = "Daily Startup Report"
-        $form.Size = New-Object System.Drawing.Size(400,300)
+        $form.Size = New-Object System.Drawing.Size(500, 400)
         $form.StartPosition = "CenterScreen"
+        $form.BackColor = [System.Drawing.SystemColors]::Control
 
 
-        $textBox = New-Object System.Windows.Forms.TextBox
+        # Rich Text Box for log content
+        $textBox = New-Object System.Windows.Forms.RichTextBox
         $textBox.Multiline = $true
         $textBox.ReadOnly = $true
         $textBox.Dock = "Fill"
         $textBox.Text = $logContent
+        $textBox.BackColor = [System.Drawing.Color]::White
+        $textBox.Font = New-Object System.Drawing.Font("Consolas", 10)
 
 
-        $form.Controls.Add($textBox)
-
-
-        # Add a button to launch Gemini Chat
+        # Chat Button with Modern Design
         $chatButton = New-Object System.Windows.Forms.Button
         $chatButton.Text = "Chat with Gemini AI"
         $chatButton.Dock = "Bottom"
-        $chatButton.Add_Click({
-            Start-GeminiChat
-        })
+        $chatButton.Height = 50
+        $chatButton.BackColor = [System.Drawing.Color]::DodgerBlue
+        $chatButton.ForeColor = [System.Drawing.Color]::White
+        $chatButton.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+        $chatButton.Font = New-Object System.Drawing.Font("Segoe UI Semibold", 12)
+        $chatButton.Add_Click({ Start-GeminiChat })
+
+
+        # Add controls
+        $form.Controls.Add($textBox)
         $form.Controls.Add($chatButton)
-
-
-        # Setup global hotkey for Gemini Chat
-        $hook = @"
-[DllImport("user32.dll")]
-public static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
-"@
-        $type = Add-Type -MemberDefinition $hook -Name win32 -Namespace system -PassThru
-        $type::RegisterHotKey([System.IntPtr]::Zero, 1, 0x2, 0x47) # Ctrl+G
 
 
         # Show the form
         $form.ShowDialog()
-    }
-    catch {
-        # Display error in a message box
-        [System.Windows.Forms.MessageBox]::Show("An error occurred during startup: $_", "Startup Script Error")
+    } catch {
+        Show-StyledNotification "An error occurred during startup: $_" "Startup Error"
     }
 }
 
 
 # Execute the startup script
 Start-AdvancedStartup
+
+
+# Install-Module -Name ps2exe -Scope CurrentUser
+# ps2exe -InputFile "startup-backup.ps1" -OutputFile "Startup.exe" -noconsole
+
+
+
+
 
